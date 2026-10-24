@@ -31,7 +31,7 @@
   .kv span:first-child{color:var(--dim)}
   .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all}
   #log{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;
-       color:var(--dim);max-height:240px;overflow:auto}
+       color:var(--dim);max-height:260px;overflow:auto}
   .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
   .bar{position:fixed;left:0;right:0;bottom:0;background:rgba(13,15,18,.94);
        border-top:1px solid var(--line);padding:12px 14px calc(12px + env(safe-area-inset-bottom));
@@ -61,6 +61,7 @@
   <div class="kv"><span>Status</span><span id="wstat">not connected</span></div>
   <div class="kv"><span>Account</span><span id="wacct" class="mono">—</span></div>
   <div class="kv"><span>Chain</span><span id="wchain">—</span></div>
+  <div class="kv"><span>ETH balance</span><span id="wbal">—</span></div>
   <div class="row">
     <button id="connect">Connect</button>
     <button id="switch" class="sec">Switch to Base</button>
@@ -78,8 +79,8 @@
 <div class="card">
   <h2>3 · Deploy your token</h2>
   <div class="kv"><span>Compiler</span><span id="cstat">idle</span></div>
-  <label>Name</label><input id="d_name" placeholder="Aurora Cat" />
-  <label>Symbol</label><input id="d_symbol" placeholder="AURA" autocapitalize="characters" />
+  <label>Name</label><input id="d_name" value="Airmail" />
+  <label>Symbol</label><input id="d_symbol" value="ARML" autocapitalize="characters" />
   <div class="row">
     <div><label>Supply (whole)</label><input id="d_supply" value="21000000" inputmode="numeric" /></div>
     <div><label>Tax (bps)</label><input id="d_tax" value="0" inputmode="numeric" /></div>
@@ -91,6 +92,7 @@
     <button id="rebuild" class="sec">Rebuild</button>
     <button id="copysrc" class="sec">Copy source</button>
   </div>
+  <button id="copyargs" class="sec">Copy constructor args</button>
 </div>
 
 <div class="card">
@@ -99,11 +101,26 @@
   <input id="token" placeholder="0x…" autocapitalize="off" autocorrect="off" spellcheck="false" />
   <button id="load" class="sec">Load token</button>
   <div id="tinfo"></div>
-  <button id="pool" class="sec">Copy address &amp; open Aerodrome</button>
 </div>
 
 <div class="card">
-  <h2>5 · Recipients</h2>
+  <h2>5 · Pool &amp; LP <span class="pill">one click</span></h2>
+  <div id="pinfo"><span class="pill">no pool yet</span></div>
+  <div class="row">
+    <div><label>ETH to seed</label><input id="s_eth" value="0.00835" inputmode="decimal" /></div>
+    <div><label>ARML to seed</label><input id="s_arml" value="200000" inputmode="numeric" /></div>
+  </div>
+  <div id="s_preview"></div>
+  <button id="seed">Create pool &amp; seed</button>
+  <div class="row">
+    <button id="checkpool" class="sec">Check pool</button>
+    <button id="burn" class="sec">Burn LP</button>
+  </div>
+  <button id="openae" class="sec">Open Aerodrome manually</button>
+</div>
+
+<div class="card">
+  <h2>6 · Recipients</h2>
   <label>Addresses — plain list or raw JSON, both work</label>
   <textarea id="addrs" placeholder="0xabc…&#10;0xdef…"></textarea>
   <div class="row">
@@ -114,7 +131,7 @@
 </div>
 
 <div class="card">
-  <h2>6 · Options</h2>
+  <h2>7 · Airdrop options</h2>
   <div class="row">
     <div><label>Amount each</label><input id="amount" value="100" inputmode="decimal" /></div>
     <div><label>Batch size</label><input id="batch" value="150" inputmode="numeric" /></div>
@@ -129,6 +146,14 @@
   <h2>Summary</h2>
   <div id="summary"><span class="pill">nothing prepared</span></div>
   <button id="preview" class="sec">Preview</button>
+</div>
+
+<div class="card">
+  <h2>8 · Verify &amp; finish</h2>
+  <label>Etherscan API key (free, works for Basescan)</label>
+  <input id="apikey" placeholder="paste key — etherscan.io/myapikey" autocapitalize="off" autocorrect="off" spellcheck="false" />
+  <button id="verify">Verify on Basescan</button>
+  <button id="renounce" class="sec">Renounce ownership — do this last</button>
 </div>
 
 <div class="card">
@@ -226,11 +251,18 @@ contract AirdropToken {
 const $ = id => document.getElementById(id);
 const log = (m, c='') => { const el=$('log'); el.innerHTML += `\n<span class="${c}">${m}</span>`; el.scrollTop = el.scrollHeight; };
 const short = a => a ? a.slice(0,6)+'…'+a.slice(-4) : '—';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 const JOBKEY = 'airdrop_job_v3';
 const BUILDKEY = 'solc_build_v1';
+const KEYKEY = 'etherscan_key_v1';
 
 const CHAINS = { 1:'Ethereum', 8453:'Base', 137:'Polygon' };
 const SCAN = { 8453:'https://base.blockscout.com', 1:'https://eth.blockscout.com', 137:'https://polygon.blockscout.com' };
+
+const WETH    = '0x4200000000000000000000000000000000000006';
+const ROUTER  = '0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43';
+const FACTORY = '0x420DD381b31aEf6683db6B902084cB0FFECe40Da';
+const DEAD    = '0x000000000000000000000000000000000000dEaD';
 
 const ABI = [
   'function name() view returns (string)',
@@ -239,8 +271,17 @@ const ABI = [
   'function totalSupply() view returns (uint256)',
   'function balanceOf(address) view returns (uint256)',
   'function owner() view returns (address)',
+  'function transferOwnership(address)',
   'function airdrop(address[] recipients, uint256 amountEach)',
 ];
+const ERC20 = [
+  'function approve(address,uint256) returns (bool)',
+  'function allowance(address,address) view returns (uint256)',
+  'function balanceOf(address) view returns (uint256)',
+  'function transfer(address,uint256) returns (bool)',
+];
+const FACT_ABI = ['function getPool(address,address,bool) view returns (address)'];
+const ROUTER_ABI = ['function addLiquidityETH(address token, bool stable, uint256 amountTokenDesired, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline) payable returns (uint256,uint256,uint256)'];
 
 let provider, signer, account, chainId, token, decimals = 18, symbol = '', plan = null, solcReady = false;
 const tokenAddr = () => $('token').value.trim();
@@ -295,12 +336,52 @@ async function getArtifact(){
   return art;
 }
 
+/* ================= wallet ================= */
+async function refreshBal(){
+  if (!account || !provider){ $('wbal').textContent = '—'; return; }
+  try{ $('wbal').textContent = (+ethers.formatEther(await provider.getBalance(account))).toFixed(5) + ' ETH'; }
+  catch{ $('wbal').textContent = '—'; }
+}
+
+async function connect(){
+  if (!window.ethereum){ log('No wallet. Open inside MetaMask\'s browser.','bad'); return; }
+  try{
+    provider = new ethers.BrowserProvider(window.ethereum);
+    account  = (await provider.send('eth_requestAccounts', []))[0];
+    signer   = await provider.getSigner();
+    chainId  = Number((await provider.getNetwork()).chainId);
+    $('wacct').textContent  = short(account);
+    $('wstat').textContent  = 'connected'; $('wstat').className = 'ok';
+    $('wchain').textContent = CHAINS[chainId] || ('chain ' + chainId);
+    log('connected ' + short(account), 'ok');
+    await refreshBal();
+    if (tokenAddr()) await loadToken();
+    if (tokenAddr()) await checkPool();
+  }catch(e){ log('connect failed: ' + (e.shortMessage||e.message), 'bad'); }
+}
+
+async function switchBase(){
+  try{
+    await window.ethereum.request({ method:'wallet_switchEthereumChain', params:[{chainId:'0x2105'}] });
+  }catch(e){
+    if (e.code === 4902){
+      await window.ethereum.request({ method:'wallet_addEthereumChain', params:[{
+        chainId:'0x2105', chainName:'Base',
+        nativeCurrency:{name:'Ether',symbol:'ETH',decimals:18},
+        rpcUrls:['https://mainnet.base.org'], blockExplorerUrls:['https://basescan.org']
+      }]});
+    } else { log('switch failed: ' + (e.shortMessage||e.message), 'bad'); return; }
+  }
+  await connect();
+}
+
+/* ================= deploy ================= */
 async function deployToken(){
   if (!signer){ log('connect wallet first','bad'); return; }
   try{
     const { abi, bytecode } = await getArtifact();
-    const name = $('d_name').value.trim() || 'Airdrop Token';
-    const sym  = $('d_symbol').value.trim() || 'AIR';
+    const name = $('d_name').value.trim() || 'Airmail';
+    const sym  = $('d_symbol').value.trim() || 'ARML';
     const sup  = $('d_supply').value.trim() || '21000000';
     const tax  = Number($('d_tax').value || 0);
     const tr   = $('d_treasury').value.trim() || account;
@@ -313,10 +394,11 @@ async function deployToken(){
     log('deployed → ' + addr, 'ok');
     $('token').value = addr;
     await loadToken();
+    await checkPool();
   }catch(e){ log('deploy failed: ' + (e.shortMessage || e.message), 'bad'); }
 }
 
-/* ================= harvest (keyless, Blockscout) ================= */
+/* ================= harvest ================= */
 async function harvest(){
   const src = $('h_token').value.trim();
   if (!ethers.isAddress(src)){ log('invalid source token','bad'); return; }
@@ -346,7 +428,7 @@ async function harvest(){
   }catch(e){ log('harvest failed: ' + (e.message||e), 'bad'); }
 }
 
-/* ================= resume marker ================= */
+/* ================= resume ================= */
 const getJob   = () => { try { return JSON.parse(localStorage.getItem(JOBKEY)); } catch { return null; } };
 const saveJob  = j  => localStorage.setItem(JOBKEY, JSON.stringify(j));
 const clearJob = () => localStorage.removeItem(JOBKEY);
@@ -357,37 +439,6 @@ function refreshBanner(){
   $('resumeinfo').innerHTML = `
     <div class="kv"><span>Token</span><span class="mono">${short(j.token)}</span></div>
     <div class="kv"><span>Progress</span><span>${j.done} / ${j.list.length} sent</span></div>`;
-}
-
-/* ================= wallet ================= */
-async function connect(){
-  if (!window.ethereum){ log('No wallet. Open inside MetaMask\'s browser.','bad'); return; }
-  try{
-    provider = new ethers.BrowserProvider(window.ethereum);
-    account  = (await provider.send('eth_requestAccounts', []))[0];
-    signer   = await provider.getSigner();
-    chainId  = Number((await provider.getNetwork()).chainId);
-    $('wacct').textContent  = short(account);
-    $('wstat').textContent  = 'connected'; $('wstat').className = 'ok';
-    $('wchain').textContent = CHAINS[chainId] || ('chain ' + chainId);
-    log('connected ' + short(account), 'ok');
-    if (tokenAddr()) await loadToken();
-  }catch(e){ log('connect failed: ' + (e.shortMessage||e.message), 'bad'); }
-}
-
-async function switchBase(){
-  try{
-    await window.ethereum.request({ method:'wallet_switchEthereumChain', params:[{chainId:'0x2105'}] });
-  }catch(e){
-    if (e.code === 4902){
-      await window.ethereum.request({ method:'wallet_addEthereumChain', params:[{
-        chainId:'0x2105', chainName:'Base',
-        nativeCurrency:{name:'Ether',symbol:'ETH',decimals:18},
-        rpcUrls:['https://mainnet.base.org'], blockExplorerUrls:['https://basescan.org']
-      }]});
-    } else { log('switch failed: ' + (e.shortMessage||e.message), 'bad'); return; }
-  }
-  await connect();
 }
 
 /* ================= token ================= */
@@ -412,6 +463,160 @@ async function loadToken(){
       <div class="kv"><span>You are owner</span><span class="${isOwn?'ok':'bad'}">${isOwn?'yes':'no'}</span></div>`;
     log('loaded ' + sy, 'ok');
   }catch(e){ log('load failed: ' + (e.shortMessage||e.message), 'bad'); }
+}
+
+/* ================= pool ================= */
+function seedPreview(){
+  const e = parseFloat($('s_eth').value) || 0;
+  const a = parseFloat($('s_arml').value) || 0;
+  if (!e || !a){ $('s_preview').innerHTML = ''; return; }
+  const price = e / a;
+  $('s_preview').innerHTML = `
+    <div class="kv"><span>Opening price</span><span>${price.toFixed(12).replace(/0+$/,'')} ETH</span></div>
+    <div class="kv"><span>Implied FDV</span><span>${(price*21000000).toFixed(4)} ETH</span></div>
+    <div class="kv"><span>Supply placed</span><span>${(a/21000000*100).toFixed(2)}%</span></div>`;
+}
+
+async function checkPool(){
+  const t = tokenAddr();
+  if (!ethers.isAddress(t) || !provider){ $('pinfo').innerHTML = '<span class="pill">no pool yet</span>'; return; }
+  try{
+    const pool = await new ethers.Contract(FACTORY, FACT_ABI, provider).getPool(t, WETH, false);
+    if (pool === ethers.ZeroAddress){
+      $('pinfo').innerHTML = '<span class="pill">pool not created yet</span>';
+      $('burn').disabled = true; return;
+    }
+    const weth = new ethers.Contract(WETH, ERC20, provider);
+    const [w, tk] = await Promise.all([
+      weth.balanceOf(pool),
+      new ethers.Contract(t, ERC20, provider).balanceOf(pool)
+    ]);
+    const lp = account ? await new ethers.Contract(pool, ERC20, provider).balanceOf(account) : 0n;
+    $('pinfo').innerHTML = `
+      <div class="kv"><span>Pool</span><span class="mono">${short(pool)}</span></div>
+      <div class="kv"><span>ETH side</span><span>${(+ethers.formatEther(w)).toFixed(6)}</span></div>
+      <div class="kv"><span>ARML side</span><span>${(+ethers.formatUnits(tk, decimals)).toLocaleString()}</span></div>
+      <div class="kv"><span>Your LP tokens</span><span class="${lp>0n?'ok':'warn'}">${lp>0n?(+ethers.formatEther(lp)).toFixed(6):'none'}</span></div>`;
+    $('burn').disabled = lp === 0n;
+  }catch(e){ log('pool check failed: ' + (e.shortMessage||e.message), 'bad'); }
+}
+
+async function seedPool(){
+  if (!signer){ log('connect wallet first','bad'); return; }
+  const t = tokenAddr();
+  if (!ethers.isAddress(t)){ log('no token address','bad'); return; }
+  let ethAmt, tokAmt;
+  try{
+    ethAmt = ethers.parseEther($('s_eth').value.trim() || '0');
+    tokAmt = ethers.parseUnits($('s_arml').value.trim() || '0', 18);
+  }catch{ log('bad amounts','bad'); return; }
+  if (ethAmt === 0n || tokAmt === 0n){ log('set both amounts','bad'); return; }
+
+  const bal = await provider.getBalance(account);
+  if (bal < ethAmt + ethers.parseEther('0.0003')){ log('not enough ETH for the seed plus gas','bad'); return; }
+
+  try{
+    const erc = new ethers.Contract(t, ERC20, signer);
+    const allow = await erc.allowance(account, ROUTER);
+    if (allow < tokAmt){
+      log('approving ARML to the router…');
+      const at = await erc.approve(ROUTER, tokAmt);
+      await at.wait();
+      log('approved ✓','ok');
+    }
+    const router = new ethers.Contract(ROUTER, ROUTER_ABI, signer);
+    log('creating pool & seeding — confirm in MetaMask…');
+    const tx = await router.addLiquidityETH(
+      t, false, tokAmt, tokAmt * 99n / 100n, ethAmt * 99n / 100n,
+      account, Math.floor(Date.now()/1000) + 900,
+      { gasLimit: 5000000n }
+    );
+    log('tx → ' + tx.hash);
+    await tx.wait();
+    log('pool seeded & LP received ✓','ok');
+    await refreshBal();
+    await checkPool();
+  }catch(e){ log('seed failed: ' + (e.shortMessage || e.message), 'bad'); }
+}
+
+async function burnLP(){
+  if (!signer){ log('connect wallet first','bad'); return; }
+  const t = tokenAddr();
+  if (!ethers.isAddress(t)){ log('no token address','bad'); return; }
+  try{
+    const pool = await new ethers.Contract(FACTORY, FACT_ABI, provider).getPool(t, WETH, false);
+    if (pool === ethers.ZeroAddress){ log('no pool','bad'); return; }
+    const p = new ethers.Contract(pool, ERC20, signer);
+    const bal = await p.balanceOf(account);
+    if (bal === 0n){ log('you hold no LP tokens','warn'); return; }
+    log('burning ' + (+ethers.formatEther(bal)).toFixed(6) + ' LP — confirm in MetaMask…');
+    const tx = await p.transfer(DEAD, bal);
+    await tx.wait();
+    log('LP burned ✓ — the pooled ETH is now locked forever','ok');
+    await checkPool();
+  }catch(e){ log('burn failed: ' + (e.shortMessage || e.message), 'bad'); }
+}
+
+/* ================= verify ================= */
+async function verify(){
+  const key = $('apikey').value.trim();
+  if (!key){ log('paste an Etherscan API key first','bad'); return; }
+  const addr = tokenAddr();
+  if (!ethers.isAddress(addr)){ log('no token address','bad'); return; }
+  const tr = $('d_treasury').value.trim() || account;
+  try{
+    const args = ethers.AbiCoder.defaultAbiCoder().encode(
+      ['string','string','uint256','uint256','address'],
+      [ $('d_name').value.trim() || 'Airmail',
+        $('d_symbol').value.trim() || 'ARML',
+        BigInt($('d_supply').value.trim() || '21000000'),
+        BigInt($('d_tax').value.trim() || '0'),
+        tr ]
+    ).slice(2);
+
+    log('submitting to Basescan…');
+    const body = new URLSearchParams({
+      module:'contract', action:'verifysourcecode', apikey:key,
+      codeformat:'solidity-single-file', sourceCode:SOURCE,
+      contractaddress:addr, contractname:'AirdropToken',
+      compilerversion:'v0.8.24+commit.e11b9ed9',
+      optimizationUsed:'0', runs:'200',
+      constructorArguements:args, licenseType:'3'
+    });
+    const r = await fetch('https://api.etherscan.io/v2/api?chainid=8453', { method:'POST', body });
+    const j = await r.json();
+    if (j.status !== '1'){
+      log('submit rejected: ' + (j.result || j.message), 'bad');
+      if (/already verified/i.test(j.result||'')) log('already verified — nothing to do','warn');
+      return;
+    }
+    const guid = j.result;
+    log('submitted, guid ' + guid + ' — waiting…');
+    for (let i = 0; i < 20; i++){
+      await sleep(6000);
+      const rr = await fetch(`https://api.etherscan.io/v2/api?chainid=8453&module=contract&action=checkverifystatus&guid=${guid}&apikey=${key}`);
+      const jj = await rr.json();
+      const res = String(jj.result || '');
+      log('  ' + res);
+      if (/pass|verified/i.test(res) && !/not/i.test(res)){ log('verified ✓','ok'); return; }
+      if (/fail|error/i.test(res)){ log('verification failed — check the log above','bad'); return; }
+    }
+    log('still pending — re-check on Basescan in a minute','warn');
+  }catch(e){ log('verify failed: ' + (e.message || e), 'bad'); }
+}
+
+async function renounce(){
+  if (!signer){ log('connect wallet first','bad'); return; }
+  const t = tokenAddr();
+  if (!ethers.isAddress(t)){ log('no token address','bad'); return; }
+  try{
+    const c = new ethers.Contract(t, ABI, signer);
+    log('renouncing — confirm in MetaMask…');
+    const tx = await c.transferOwnership(ethers.ZeroAddress);
+    await tx.wait();
+    log('ownership renounced ✓ — setTax, setTreasury and airdrop are now dead','ok');
+    await loadToken();
+  }catch(e){ log('renounce failed: ' + (e.shortMessage || e.message), 'bad'); }
 }
 
 /* ================= addresses ================= */
@@ -442,7 +647,7 @@ async function filterHolders(list){
   return out.filter(Boolean);
 }
 
-/* ================= preview ================= */
+/* ================= preview & send ================= */
 async function preview(){
   if (!signer){ log('connect wallet first','bad'); return; }
   if (!ethers.isAddress(tokenAddr())){ log('load a token first','bad'); return; }
@@ -473,7 +678,6 @@ async function preview(){
   log(okBal ? 'ready' : 'insufficient balance', okBal ? 'ok' : 'bad');
 }
 
-/* ================= send ================= */
 async function send(){
   if (!plan) return;
   $('send').disabled = true;
@@ -510,6 +714,7 @@ async function send(){
   }
   if (dry) log('simulation complete — no gas spent','warn');
   else if ((getJob()?.done || 0) >= list.length){ log('all done.','ok'); clearJob(); refreshBanner(); }
+  await refreshBal();
   $('send').disabled = false;
 }
 
@@ -529,38 +734,61 @@ async function resumeJob(){
 }
 
 /* ================= wiring ================= */
-$('connect').onclick = connect;
-$('switch').onclick  = switchBase;
-$('harvest').onclick = harvest;
-$('deploy').onclick  = deployToken;
-$('load').onclick    = loadToken;
-$('preview').onclick = preview;
-$('send').onclick    = send;
-$('resume').onclick  = resumeJob;
-$('discard').onclick = () => { clearJob(); refreshBanner(); };
-$('clear').onclick   = () => { $('addrs').value = ''; parseAddresses(); };
-$('paste').onclick   = async () => {
+$('connect').onclick  = connect;
+$('switch').onclick   = switchBase;
+$('harvest').onclick  = harvest;
+$('deploy').onclick   = deployToken;
+$('load').onclick     = loadToken;
+$('checkpool').onclick= checkPool;
+$('seed').onclick     = seedPool;
+$('burn').onclick     = burnLP;
+$('verify').onclick   = verify;
+$('renounce').onclick = renounce;
+$('preview').onclick  = preview;
+$('send').onclick     = send;
+$('resume').onclick   = resumeJob;
+$('discard').onclick  = () => { clearJob(); refreshBanner(); };
+$('clear').onclick    = () => { $('addrs').value = ''; parseAddresses(); };
+$('paste').onclick    = async () => {
   try{ $('addrs').value += await navigator.clipboard.readText(); parseAddresses(); }
   catch{ log('clipboard blocked — paste manually','warn'); }
 };
 $('rebuild').onclick = () => { localStorage.removeItem(BUILDKEY); setCstat('idle'); log('cache cleared — will recompile next deploy'); };
 $('copysrc').onclick = async () => {
-  try{ await navigator.clipboard.writeText(SOURCE); log('contract source copied — paste it on Basescan to verify','ok'); }
+  try{ await navigator.clipboard.writeText(SOURCE); log('contract source copied','ok'); }
   catch{ log('copy failed','warn'); }
 };
-$('pool').onclick = async () => {
-  if (!ethers.isAddress(tokenAddr())){ log('no token address yet','warn'); return; }
-  try{ await navigator.clipboard.writeText(tokenAddr()); log('token address copied — paste it in Aerodrome','ok'); }catch{}
-  window.open('https://aerodrome.finance/liquidity', '_blank');
+$('copyargs').onclick = async () => {
+  const tr = $('d_treasury').value.trim() || account;
+  if (!tr || !ethers.isAddress(tr)){ log('treasury invalid — connect or fill the field','bad'); return; }
+  try{
+    const enc = ethers.AbiCoder.defaultAbiCoder().encode(
+      ['string','string','uint256','uint256','address'],
+      [ $('d_name').value.trim() || 'Airmail',
+        $('d_symbol').value.trim() || 'ARML',
+        BigInt($('d_supply').value.trim() || '21000000'),
+        BigInt($('d_tax').value.trim() || '0'),
+        tr ]
+    );
+    await navigator.clipboard.writeText(enc.slice(2));
+    log('constructor args copied','ok');
+  }catch(e){ log('encode failed: ' + (e.shortMessage||e.message),'bad'); }
 };
+$('openae').onclick = () => window.open('https://aerodrome.finance/liquidity', '_blank');
 $('addrs').addEventListener('input', parseAddresses);
+$('s_eth').addEventListener('input', seedPreview);
+$('s_arml').addEventListener('input', seedPreview);
 $('dry').onchange = () => { $('send').textContent = $('dry').checked ? 'Simulate (no gas)' : 'Send airdrop'; };
+
+$('apikey').value = localStorage.getItem(KEYKEY) || '';
+$('apikey').addEventListener('change', () => localStorage.setItem(KEYKEY, $('apikey').value.trim()));
 
 if (window.ethereum){
   window.ethereum.on?.('accountsChanged', () => connect());
   window.ethereum.on?.('chainChanged',   () => connect());
 }
 refreshBanner();
+seedPreview();
 </script>
 </body>
 </html>
