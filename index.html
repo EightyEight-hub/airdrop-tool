@@ -159,6 +159,7 @@
 <div class="card">
   <h2>Log</h2>
   <div id="log">ready.</div>
+  <button id="clearlog" class="sec">Clear log</button>
 </div>
 
 <div class="bar"><button id="send" disabled>Send airdrop</button></div>
@@ -249,7 +250,12 @@ contract AirdropToken {
 
 /* ================= helpers ================= */
 const $ = id => document.getElementById(id);
-const log = (m, c='') => { const el=$('log'); el.innerHTML += `\n<span class="${c}">${m}</span>`; el.scrollTop = el.scrollHeight; };
+const TOKKEY = 'tok_addr_v1';
+const LOGKEY = 'log_v1';
+const log = (m, c='') => {
+  const el=$('log'); el.innerHTML += `\n<span class="${c}">${m}</span>`; el.scrollTop = el.scrollHeight;
+  try{ localStorage.setItem(LOGKEY, el.innerHTML); }catch{}
+};
 const short = a => a ? a.slice(0,6)+'…'+a.slice(-4) : '—';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const JOBKEY = 'airdrop_job_v3';
@@ -355,8 +361,7 @@ async function connect(){
     $('wchain').textContent = CHAINS[chainId] || ('chain ' + chainId);
     log('connected ' + short(account), 'ok');
     await refreshBal();
-    if (tokenAddr()) await loadToken();
-    if (tokenAddr()) await checkPool();
+    if (tokenAddr()){ await loadToken(); await checkPool(); }
   }catch(e){ log('connect failed: ' + (e.shortMessage||e.message), 'bad'); }
 }
 
@@ -393,6 +398,7 @@ async function deployToken(){
     const addr = await c.getAddress();
     log('deployed → ' + addr, 'ok');
     $('token').value = addr;
+    localStorage.setItem(TOKKEY, addr);
     await loadToken();
     await checkPool();
   }catch(e){ log('deploy failed: ' + (e.shortMessage || e.message), 'bad'); }
@@ -529,7 +535,7 @@ async function seedPool(){
     const tx = await router.addLiquidityETH(
       t, false, tokAmt, tokAmt * 99n / 100n, ethAmt * 99n / 100n,
       account, Math.floor(Date.now()/1000) + 900,
-      { gasLimit: 5000000n }
+      { value: ethAmt, gasLimit: 5000000n }
     );
     log('tx → ' + tx.hash);
     await tx.wait();
@@ -598,7 +604,7 @@ async function verify(){
       const jj = await rr.json();
       const res = String(jj.result || '');
       log('  ' + res);
-      if (/pass|verified/i.test(res) && !/not/i.test(res)){ log('verified ✓','ok'); return; }
+      if (/pass/i.test(res)){ log('verified ✓','ok'); return; }
       if (/fail|error/i.test(res)){ log('verification failed — check the log above','bad'); return; }
     }
     log('still pending — re-check on Basescan in a minute','warn');
@@ -749,6 +755,7 @@ $('send').onclick     = send;
 $('resume').onclick   = resumeJob;
 $('discard').onclick  = () => { clearJob(); refreshBanner(); };
 $('clear').onclick    = () => { $('addrs').value = ''; parseAddresses(); };
+$('clearlog').onclick = () => { $('log').innerHTML = 'ready.'; try{ localStorage.removeItem(LOGKEY); }catch{} };
 $('paste').onclick    = async () => {
   try{ $('addrs').value += await navigator.clipboard.readText(); parseAddresses(); }
   catch{ log('clipboard blocked — paste manually','warn'); }
@@ -780,8 +787,12 @@ $('s_eth').addEventListener('input', seedPreview);
 $('s_arml').addEventListener('input', seedPreview);
 $('dry').onchange = () => { $('send').textContent = $('dry').checked ? 'Simulate (no gas)' : 'Send airdrop'; };
 
+$('token').addEventListener('change', () => { if (tokenAddr()) localStorage.setItem(TOKKEY, tokenAddr()); });
 $('apikey').value = localStorage.getItem(KEYKEY) || '';
 $('apikey').addEventListener('change', () => localStorage.setItem(KEYKEY, $('apikey').value.trim()));
+
+if (!tokenAddr() && localStorage.getItem(TOKKEY)) $('token').value = localStorage.getItem(TOKKEY);
+if (localStorage.getItem(LOGKEY)) $('log').innerHTML = localStorage.getItem(LOGKEY);
 
 if (window.ethereum){
   window.ethereum.on?.('accountsChanged', () => connect());
