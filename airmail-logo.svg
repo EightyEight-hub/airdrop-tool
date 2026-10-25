@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <defs>
+    <pattern id="s" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="2" height="4" fill="#1B3A6B"/>
+      <rect x="2" width="2" height="4" fill="#CE3B32"/>
+    </pattern>
+    <clipPath id="b">
+      <path d="M3 9H29V23H3Z M6.5 12.5H25.5V19.5H6.5Z" clip-rule="evenodd"/>
+    </clipPath>
+  </defs>
+  <rect width="32" height="32" fill="#F4ECDA"/>
+  <rect x="3" y="9" width="26" height="14" fill="url(#s)" clip-path="url(#b)"/>
+  <rect x="6.5" y="12.5" width="19" height="7" fill="#FFFFFF"/>
+  <path d="M6.5 12.5L16 17.5L25.5 12.5" fill="none" stroke="#14203A"
+        stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="22.5" cy="19" r="4.6" fill="none" stroke="#14203A" stroke-width="0.9"/>
+  <circle cx="22.5" cy="19" r="2.4" fill="none" stroke="#14203A" stroke-width="0.7"/>
+</svg>
